@@ -495,7 +495,16 @@ server {
     # Standard PHP processing
     location ~ \.php$ {
         include fastcgi_params;
-        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        # Adjust PHP version as needed (e.g., php8.1-fpm.sock, php8.2-fpm.sock)
+        fastcgi_pass unix:/var/run/php/php<version>-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+    
+    # Standard PHP processing
+    location ~ \.php$ {
+        include fastcgi_params;
+        # Adjust PHP version as needed (e.g., php8.1-fpm.sock, php8.2-fpm.sock)
+        fastcgi_pass unix:/var/run/php/php<version>-fpm.sock;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         fastcgi_intercept_errors on;
     }

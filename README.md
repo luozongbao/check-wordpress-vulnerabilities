@@ -222,6 +222,417 @@ For issues or questions:
 2. Create detailed bug reports with target URLs (if public)
 3. Include error messages and environment details
 
+## 📚 Appendix: Vulnerability Remediation Guide
+
+### WordPress-Level Fixes
+
+#### 🔴 Critical Vulnerabilities
+
+**Exposed wp-config.php**
+```bash
+# Move wp-config.php one directory above web root
+mv wp-config.php ../
+# Or add .htaccess protection
+echo '<files wp-config.php>
+order allow,deny
+deny from all
+</files>' >> .htaccess
+```
+
+**Outdated WordPress Version**
+```bash
+# Update via WP-CLI
+wp core update
+wp core update-db
+
+# Or via WordPress admin dashboard
+# Dashboard → Updates → Update Now
+```
+
+**XML-RPC Exposed**
+```php
+// Add to wp-config.php
+add_filter('xmlrpc_enabled', '__return_false');
+
+// Or via .htaccess
+<Files xmlrpc.php>
+Order Deny,Allow
+Deny from all
+</Files>
+```
+
+**User Enumeration**
+```php
+// Add to functions.php
+function disable_user_enumeration() {
+    if (is_admin() && !defined('DOING_AJAX')) return;
+    if (isset($_REQUEST['author'])) {
+        wp_redirect(home_url(), 301);
+        exit;
+    }
+}
+add_action('init', 'disable_user_enumeration');
+
+// Block REST API user endpoint
+function restrict_rest_api_users($result, $server, $request) {
+    if (strpos($request->get_route(), '/wp/v2/users') !== false) {
+        return new WP_Error('rest_user_cannot_view', 'Sorry, you are not allowed to list users.', array('status' => 401));
+    }
+    return $result;
+}
+add_filter('rest_pre_dispatch', 'restrict_rest_api_users', 10, 3);
+```
+
+#### 🟡 Warning-Level Issues
+
+**Missing Security Headers**
+```php
+// Add to wp-config.php or functions.php
+function add_security_headers() {
+    header('X-Frame-Options: SAMEORIGIN');
+    header('X-Content-Type-Options: nosniff');
+    header('X-XSS-Protection: 1; mode=block');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+}
+add_action('send_headers', 'add_security_headers');
+```
+
+**Accessible Login Page**
+```php
+// Rename login URL (via plugin or custom code)
+// Or add IP restrictions to .htaccess
+<Files wp-login.php>
+Order Deny,Allow
+Deny from all
+Allow from 192.168.1.0/24
+Allow from your.office.ip.address
+</Files>
+```
+
+### Apache Server Configuration
+
+#### Security Headers in .htaccess
+```apache
+# Add comprehensive security headers
+<IfModule mod_headers.c>
+    # Prevent clickjacking
+    Header always set X-Frame-Options "SAMEORIGIN"
+    
+    # Prevent MIME type sniffing
+    Header always set X-Content-Type-Options "nosniff"
+    
+    # XSS Protection
+    Header always set X-XSS-Protection "1; mode=block"
+    
+    # Strict Transport Security (HTTPS only)
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    
+    # Content Security Policy
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; connect-src 'self'; frame-ancestors 'self';"
+    
+    # Referrer Policy
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    
+    # Remove server signature
+    Header always unset Server
+    Header always unset X-Powered-By
+</IfModule>
+
+# Disable directory browsing
+Options -Indexes
+
+# Protect sensitive files
+<FilesMatch "^(wp-config\.php|\.htaccess|\.htpasswd|error_log|debug\.log)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Protect wp-content directories
+<Directory "*/wp-content/uploads/">
+    <Files "*.php">
+        Order Allow,Deny
+        Deny from all
+    </Files>
+</Directory>
+
+# Block access to wp-includes
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+    RewriteRule ^wp-admin/includes/ - [F,L]
+    RewriteRule !^wp-includes/ - [S=3]
+    RewriteRule ^wp-includes/[^/]+\.php$ - [F,L]
+    RewriteRule ^wp-includes/js/tinymce/langs/.+\.php - [F,L]
+    RewriteRule ^wp-includes/theme-compat/ - [F,L]
+</IfModule>
+
+# Limit file upload size
+LimitRequestBody 10485760  # 10MB
+
+# Disable XML-RPC
+<Files xmlrpc.php>
+    Order Allow,Deny
+    Deny from all
+</Files>
+```
+
+#### Apache Virtual Host SSL Configuration
+```apache
+<VirtualHost *:443>
+    ServerName example.com
+    DocumentRoot /var/www/html
+    
+    # SSL Configuration
+    SSLEngine on
+    SSLCertificateFile /path/to/certificate.crt
+    SSLCertificateKeyFile /path/to/private.key
+    SSLCertificateChainFile /path/to/chain.crt
+    
+    # Modern SSL configuration
+    SSLProtocol all -SSLv2 -SSLv3 -TLSv1 -TLSv1.1
+    SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+    SSLHonorCipherOrder on
+    
+    # OCSP Stapling
+    SSLUseStapling on
+    SSLStaplingResponderTimeout 5
+    SSLStaplingReturnResponderErrors off
+    
+    # Security headers
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    
+    # Hide server information
+    ServerTokens Prod
+    ServerSignature Off
+</VirtualHost>
+
+# Redirect HTTP to HTTPS
+<VirtualHost *:80>
+    ServerName example.com
+    Redirect permanent / https://example.com/
+</VirtualHost>
+```
+
+### Nginx Server Configuration
+
+#### Security Headers in nginx.conf
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+    root /var/www/html;
+    
+    # SSL Configuration
+    ssl_certificate /path/to/certificate.crt;
+    ssl_certificate_key /path/to/private.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # OCSP Stapling
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_trusted_certificate /path/to/chain.crt;
+    
+    # Security Headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https:; connect-src 'self'; frame-ancestors 'self';" always;
+    
+    # Hide Nginx version
+    server_tokens off;
+    
+    # Disable access to sensitive files
+    location ~* /(?:uploads|files)/.*\.php$ {
+        deny all;
+    }
+    
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    location ~ ~$ {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+    
+    # Block access to wp-config and other sensitive files
+    location ~* /(wp-config\.php|readme\.html|license\.txt|xmlrpc\.php) {
+        deny all;
+    }
+    
+    # Protect wp-admin
+    location /wp-admin/ {
+        # Allow only specific IPs
+        allow 192.168.1.0/24;
+        allow your.office.ip.address;
+        deny all;
+        
+        location ~ \.php$ {
+            include fastcgi_params;
+            fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+            fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        }
+    }
+    
+    # Rate limiting for login attempts
+    location = /wp-login.php {
+        limit_req zone=login burst=2 nodelay;
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+    
+    # Standard PHP processing
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_intercept_errors on;
+    }
+}
+
+# HTTP to HTTPS redirect
+server {
+    listen 80;
+    server_name example.com;
+    return 301 https://$server_name$request_uri;
+}
+
+# Rate limiting configuration (add to http block)
+http {
+    limit_req_zone $binary_remote_addr zone=login:10m rate=1r/m;
+    limit_req_zone $binary_remote_addr zone=general:10m rate=10r/s;
+}
+```
+
+### System-Level Security Enhancements
+
+#### File Permissions
+```bash
+# WordPress recommended permissions
+find /var/www/html/ -type d -exec chmod 755 {} \;
+find /var/www/html/ -type f -exec chmod 644 {} \;
+chmod 600 wp-config.php
+chmod 644 .htaccess
+
+# Secure ownership
+chown -R www-data:www-data /var/www/html/
+```
+
+#### Firewall Configuration (UFW)
+```bash
+# Basic firewall setup
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow ssh
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw enable
+
+# Rate limiting for HTTP(S)
+ufw limit 80/tcp
+ufw limit 443/tcp
+```
+
+#### Fail2Ban Configuration
+```ini
+# /etc/fail2ban/jail.local
+[wordpress]
+enabled = true
+filter = wordpress
+logpath = /var/log/auth.log
+maxretry = 3
+bantime = 3600
+findtime = 600
+
+[nginx-limit-req]
+enabled = true
+filter = nginx-limit-req
+action = iptables-multiport[name=ReqLimit, port="http,https", protocol=tcp]
+logpath = /var/log/nginx/error.log
+findtime = 600
+bantime = 7200
+maxretry = 10
+```
+
+### Monitoring and Maintenance
+
+#### Log Monitoring
+```bash
+# Monitor failed login attempts
+tail -f /var/log/auth.log | grep wordpress
+
+# Monitor web server access
+tail -f /var/log/nginx/access.log | grep -E "(wp-login|wp-admin)"
+
+# Check for suspicious PHP errors
+tail -f /var/log/nginx/error.log | grep -i "php"
+```
+
+#### Automated Security Updates
+```bash
+# Enable automatic WordPress core updates
+echo "define('WP_AUTO_UPDATE_CORE', true);" >> wp-config.php
+
+# Cron job for security updates (Ubuntu/Debian)
+echo "0 2 * * * root apt update && apt upgrade -y" >> /etc/crontab
+```
+
+#### Regular Security Audits
+```bash
+# Create monthly security check script
+#!/bin/bash
+# /opt/security-check.sh
+
+echo "=== Monthly Security Audit ===" > /var/log/security-audit.log
+date >> /var/log/security-audit.log
+
+# Check for outdated packages
+apt list --upgradable >> /var/log/security-audit.log 2>/dev/null
+
+# Check file permissions
+find /var/www/html -name "*.php" -perm 777 >> /var/log/security-audit.log
+
+# Check for suspicious files
+find /var/www/html -name "*.php" -mtime -7 -ls >> /var/log/security-audit.log
+
+# Run WordPress vulnerability scan
+/path/to/check_wp_vulnerability.sh yourdomain.com >> /var/log/security-audit.log
+
+# Email results
+mail -s "Monthly Security Audit" admin@yourdomain.com < /var/log/security-audit.log
+```
+
+### Emergency Response Procedures
+
+#### Suspected Compromise
+```bash
+# 1. Immediately change all passwords
+wp user update admin --user_pass=new_strong_password
+
+# 2. Check for malicious files
+find /var/www/html -name "*.php" -type f -exec grep -l "eval\|base64_decode\|exec\|system" {} \;
+
+# 3. Review recent file changes
+find /var/www/html -type f -mtime -7 -ls
+
+# 4. Check access logs for suspicious activity
+grep -E "(POST|GET).*(wp-admin|wp-login)" /var/log/nginx/access.log | tail -100
+
+# 5. Restore from clean backup if necessary
+# Always keep clean, tested backups!
+```
+
 ---
 
 **⚠️ Disclaimer**: This tool is for authorized security testing only. Users are responsible for ensuring they have permission to test target websites. The authors are not responsible for any misuse of this software.

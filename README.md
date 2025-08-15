@@ -251,7 +251,7 @@ wp core update-db
 
 **XML-RPC Exposed**
 ```php
-// Add to wp-config.php
+// Add to functions.php or a custom plugin
 add_filter('xmlrpc_enabled', '__return_false');
 
 // Or via .htaccess

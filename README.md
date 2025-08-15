@@ -594,7 +594,10 @@ tail -f /var/log/nginx/error.log | grep -i "php"
 echo "define('WP_AUTO_UPDATE_CORE', true);" >> wp-config.php
 
 # Cron job for security updates (Ubuntu/Debian)
-echo "0 2 * * * root apt update && apt upgrade -y" >> /etc/crontab
+# Enable unattended security upgrades (Ubuntu/Debian)
+apt update && apt install -y unattended-upgrades
+dpkg-reconfigure --priority=low unattended-upgrades
+# For more configuration, edit /etc/apt/apt.conf.d/50unattended-upgrades
 ```
 
 #### Regular Security Audits
